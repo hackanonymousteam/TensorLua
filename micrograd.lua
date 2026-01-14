@@ -1,9 +1,14 @@
 -- MicroGrad Lua Library
--- Biblioteca de diferenciação automática para Game Guardian Lua
--- Versão: 1.0.0
 
 local Value = {}
 Value.__index = Value
+
+local function ensure_value(x)
+    if type(x) == "number" then
+        return Value.new(x)
+    end
+    return x
+end
 
 function Value.new(data, children, op)
     local self = setmetatable({}, Value)
@@ -16,9 +21,7 @@ function Value.new(data, children, op)
 end
 
 function Value:__add(other)
-    if type(other) == "number" then
-        other = Value.new(other)
-    end
+    other = ensure_value(other)
     local out = Value.new(self.data + other.data, {self, other}, '+')
     
     out._backward = function()
@@ -30,9 +33,7 @@ function Value:__add(other)
 end
 
 function Value:__mul(other)
-    if type(other) == "number" then
-        other = Value.new(other)
-    end
+    other = ensure_value(other)
     local out = Value.new(self.data * other.data, {self, other}, '*')
     
     out._backward = function()
@@ -81,21 +82,21 @@ function Value:backward()
     end
 end
 
+function Value:__unm()
+    return self * -1
+end
+
 function Value:__neg()
     return self * -1
 end
 
 function Value:__sub(other)
-    if type(other) == "number" then
-        other = Value.new(other)
-    end
+    other = ensure_value(other)
     return self + (-other)
 end
 
 function Value:__truediv(other)
-    if type(other) == "number" then
-        other = Value.new(other)
-    end
+    other = ensure_value(other)
     local one = Value.new(1)
     return self * (one / other)
 end
@@ -108,6 +109,18 @@ function Value.zero_grad(list_of_values)
     for _, v in ipairs(list_of_values) do
         v.grad = 0
     end
+end
+
+function Value:__div(other)
+    other = ensure_value(other)
+    local out = Value.new(1 / other.data, {other}, '/')
+    
+    out._backward = function()
+        local grad_out = out.grad
+        other.grad = other.grad + (-1 / (other.data * other.data)) * grad_out
+    end
+    
+    return self * out
 end
 
 setmetatable(Value, {
@@ -305,10 +318,12 @@ function Loss.mse(predictions, targets)
         total_loss = total_loss + (diff * diff)
     end
     
-    return total_loss / n
+    return total_loss / Value.new(n)
 end
 
 function Loss.mse_single(prediction, target)
+    prediction = ensure_value(prediction)
+    target = ensure_value(target)
     local diff = prediction - target
     return diff * diff
 end
@@ -375,7 +390,7 @@ local Trainer = {}
 function Trainer.train(model, X_train, y_train, epochs, learning_rate, options)
     options = options or {}
     local batch_size = options.batch_size or 1
-    local loss_fn = options.loss_fn or Loss.mse
+    local loss_fn = options.loss_fn or Loss.mse_single
     local optimizer_type = options.optimizer or 'sgd'
     local verbose = options.verbose or false
     local shuffle = options.shuffle or true
@@ -416,7 +431,7 @@ function Trainer.train(model, X_train, y_train, epochs, learning_rate, options)
             
             for i = start_idx, end_idx do
                 local prediction = model(X_values[i])
-                local loss = loss_fn({prediction}, {y_values[i]})
+                local loss = loss_fn(prediction, y_values[i])
                 batch_loss = batch_loss + loss
                 batch_count = batch_count + 1
             end
